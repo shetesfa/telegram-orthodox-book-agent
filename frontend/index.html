@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Book Search Agent</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="brand">
+            <span class="brand-icon">📚</span>
+            <div class="brand-text">
+                <h1>Book Agent</h1>
+                <p>Telegram Search</p>
+            </div>
+        </div>
+
+        <ul class="nav-links">
+            <li class="nav-link active" data-tab="tab-dashboard">
+                <span>📊</span> Dashboard
+            </li>
+            <li class="nav-link" data-tab="tab-books">
+                <span>📖</span> Book List
+                <span class="nav-badge" id="badge-total-books">0</span>
+            </li>
+            <li class="nav-link" data-tab="tab-sources">
+                <span>📡</span> Telegram Sources
+                <span class="nav-badge" id="badge-total-sources">0</span>
+            </li>
+            <li class="nav-link" data-tab="tab-search">
+                <span>🔎</span> Test Search
+            </li>
+            <li class="nav-link" data-tab="tab-batch">
+                <span>⚡</span> Batch Automation
+            </li>
+            <li class="nav-link" data-tab="tab-orthodox">
+                <span>⛪️</span> Orthodox Harvester
+                <span class="nav-badge" id="badge-orthodox-forwarded" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-green);">0</span>
+            </li>
+            <li class="nav-link" data-tab="tab-history">
+                <span>📜</span> History
+            </li>
+            <li class="nav-link" data-tab="tab-settings">
+                <span>⚙️</span> Settings
+            </li>
+            <li class="nav-link" data-tab="tab-logs">
+                <span>💻</span> Logs
+            </li>
+        </ul>
+
+        <div class="sidebar-footer">
+            <div class="status-indicator">
+                <div class="status-dot" id="tg-status-dot"></div>
+                <div style="flex-grow: 1;">
+                    <div id="tg-status-text" style="font-weight: 600;">Checking...</div>
+                    <div id="tg-status-user" style="font-size: 11px; color: var(--text-muted);"></div>
+                </div>
+                <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;" id="btn-tg-action" onclick="openAuthModal()">Connect</button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Wrapper -->
+    <div class="main-wrapper">
+        <header class="topbar">
+            <div class="topbar-title">
+                <h2 id="page-title">Dashboard Overview</h2>
+            </div>
+            <div class="topbar-actions">
+                <button class="btn btn-secondary" onclick="refreshCurrentTab()">🔄 Refresh</button>
+                <button class="btn btn-primary" onclick="switchTab('tab-batch')">▶ Batch Control</button>
+            </div>
+        </header>
+
+        <main class="content-area">
+            <!-- 1. DASHBOARD TAB -->
+            <section id="tab-dashboard" class="tab-panel active">
+                <div class="cards-grid">
+                    <div class="stat-card">
+                        <div class="stat-header"><span>Total Requested</span> <span>📚</span></div>
+                        <div class="stat-value" id="stat-total">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header"><span>Sent to Saved Messages</span> <span>📤</span></div>
+                        <div class="stat-value" id="stat-sent" style="color: var(--accent-green);">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header"><span>Review Required</span> <span>⚠️</span></div>
+                        <div class="stat-value" id="stat-review" style="color: var(--accent-yellow);">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header"><span>Not Found</span> <span>❌</span></div>
+                        <div class="stat-value" id="stat-notfound" style="color: var(--accent-red);">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header"><span>Skipped Duplicates</span> <span>⏭</span></div>
+                        <div class="stat-value" id="stat-duplicates" style="color: var(--text-secondary);">0</div>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>⚡ Live Batch Progress</span>
+                        <span id="dash-batch-badge" class="badge badge-secondary">IDLE</span>
+                    </div>
+                    <div>
+                        <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--text-secondary);">
+                            <span id="dash-current-title">No search running</span>
+                            <span id="dash-progress-label">0%</span>
+                        </div>
+                        <div class="progress-container">
+                            <div class="progress-bar" id="dash-progress-bar"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>🚀 Quick Actions</span>
+                    </div>
+                    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                        <button class="btn btn-primary" onclick="switchTab('tab-books')">➕ Add Books</button>
+                        <button class="btn btn-secondary" onclick="switchTab('tab-search')">🔎 Test One Book</button>
+                        <button class="btn btn-secondary" onclick="switchTab('tab-sources')">📡 View Authorized Channels</button>
+                        <button class="btn btn-secondary" onclick="openAuthModal()">🔐 Telegram Account</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. BOOKS TAB -->
+            <section id="tab-books" class="tab-panel">
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>➕ Add Books to Search List</span>
+                    </div>
+                    
+                    <div style="display: flex; gap: 16px; margin-bottom: 20px;">
+                        <button class="btn btn-primary" id="btn-mode-batch" onclick="setAddMode('batch')">Paste Multi-line Titles</button>
+                        <button class="btn btn-secondary" id="btn-mode-single" onclick="setAddMode('single')">Single Book Form</button>
+                        <button class="btn btn-secondary" id="btn-mode-file" onclick="setAddMode('file')">Import TXT / CSV</button>
+                    </div>
+
+                    <!-- Batch Paste Form -->
+                    <div id="form-add-batch">
+                        <div class="form-group">
+                            <label>Enter titles (one per line, e.g. "Database System Concepts"):</label>
+                            <textarea id="input-batch-text" class="input-field" rows="6" placeholder="Database System Concepts&#10;Operating System Concepts&#10;Computer Networks&#10;Computer Organization&#10;Software Engineering"></textarea>
+                        </div>
+                        <button class="btn btn-primary" onclick="submitBatchBooks()">Add Books to List</button>
+                    </div>
+
+                    <!-- Single Book Form -->
+                    <div id="form-add-single" style="display: none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Book Title *</label>
+                                <input type="text" id="input-single-title" class="input-field" placeholder="e.g. Database System Concepts">
+                            </div>
+                            <div class="form-group">
+                                <label>Author</label>
+                                <input type="text" id="input-single-author" class="input-field" placeholder="e.g. Abraham Silberschatz">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Edition / Year</label>
+                                <input type="text" id="input-single-edition" class="input-field" placeholder="e.g. 8th Edition">
+                            </div>
+                            <div class="form-group">
+                                <label>ISBN (Optional)</label>
+                                <input type="text" id="input-single-isbn" class="input-field" placeholder="e.g. 9780078022159">
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" onclick="submitSingleBook()">Add Book</button>
+                    </div>
+
+                    <!-- File Import Form -->
+                    <div id="form-add-file" style="display: none;">
+                        <div class="form-group">
+                            <label>Choose a .TXT or .CSV file (with title, author, isbn, edition headers):</label>
+                            <input type="file" id="input-file-upload" class="input-field" accept=".txt,.csv">
+                        </div>
+                        <button class="btn btn-primary" onclick="submitImportFile()">Upload & Import</button>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>📋 Book Queue</span>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-secondary" onclick="loadBooks()">Refresh</button>
+                            <button class="btn btn-danger" onclick="clearBooks()">Clear All</button>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Title</th>
+                                    <th>Author</th>
+                                    <th>Edition</th>
+                                    <th>Status</th>
+                                    <th>Confidence</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="books-table-body">
+                                <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No books loaded yet.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 3. SOURCES TAB -->
+            <section id="tab-sources" class="tab-panel">
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>📡 Authorized Telegram Chats & Channels</span>
+                        <button class="btn btn-primary" onclick="discoverSources()">Discover / Refresh Sources</button>
+                    </div>
+                    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+                        Only chats and channels that your authenticated Telegram account has legitimate permission to access are listed. 
+                        Enable the sources you wish to search for books.
+                    </p>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Enabled</th>
+                                    <th>Name</th>
+                                    <th>Username</th>
+                                    <th>Type</th>
+                                    <th>Chat ID</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sources-table-body">
+                                <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No sources discovered yet. Connect your Telegram account and click 'Discover Sources'.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 4. TEST SEARCH TAB -->
+            <section id="tab-search" class="tab-panel">
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>🔎 Test Mode: Single Book Search</span>
+                    </div>
+                    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+                        Test the matching engine on a single title and preview candidate files before running automatic batch mode.
+                    </p>
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 2;">
+                            <label>Book Title *</label>
+                            <input type="text" id="test-search-title" class="input-field" placeholder="e.g. Database System Concepts">
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label>Author (Optional)</label>
+                            <input type="text" id="test-search-author" class="input-field" placeholder="e.g. Silberschatz">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" id="btn-run-test-search" onclick="runTestSearch()">Search Telegram Sources</button>
+                </div>
+
+                <div class="panel-card" id="test-results-panel" style="display: none;">
+                    <div class="panel-title">
+                        <span>📑 Candidates Found</span>
+                        <span id="test-results-count" class="badge badge-info">0 candidates</span>
+                    </div>
+                    <div id="test-candidates-list"></div>
+                </div>
+            </section>
+
+            <!-- 5. BATCH AUTOMATION TAB -->
+            <section id="tab-batch" class="tab-panel">
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>⚡ Batch Controller</span>
+                        <span id="batch-status-badge" class="badge badge-secondary">IDLE</span>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+                        <button class="btn btn-primary" id="btn-batch-start" onclick="startBatch()">▶ Start Search</button>
+                        <button class="btn btn-secondary" id="btn-batch-pause" onclick="pauseBatch()">⏸ Pause</button>
+                        <button class="btn btn-secondary" id="btn-batch-resume" onclick="resumeBatch()">▶ Resume</button>
+                        <button class="btn btn-danger" id="btn-batch-stop" onclick="stopBatch()">⏹ Stop</button>
+                    </div>
+
+                    <div style="margin-bottom: 16px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px;">
+                            <span>Current Processing: <strong id="batch-current-title">None</strong></span>
+                            <span id="batch-current-index">0 / 0</span>
+                        </div>
+                        <div class="progress-container">
+                            <div class="progress-bar" id="batch-progress-bar"></div>
+                        </div>
+                    </div>
+
+                    <div class="cards-grid">
+                        <div class="stat-card">
+                            <div class="stat-header"><span>Requested</span></div>
+                            <div class="stat-value" id="batch-stat-requested">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-header"><span>Found</span></div>
+                            <div class="stat-value" id="batch-stat-found" style="color: var(--accent-blue);">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-header"><span>Sent</span></div>
+                            <div class="stat-value" id="batch-stat-sent" style="color: var(--accent-green);">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-header"><span>Needs Review</span></div>
+                            <div class="stat-value" id="batch-stat-review" style="color: var(--accent-yellow);">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-header"><span>Not Found</span></div>
+                            <div class="stat-value" id="batch-stat-notfound" style="color: var(--accent-red);">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-header"><span>Failed</span></div>
+                            <div class="stat-value" id="batch-stat-failed">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Uncertain Reviews -->
+                <div class="panel-card" id="batch-reviews-panel" style="display: none;">
+                    <div class="panel-title">
+                        <span>⚠️ Uncertain Matches (Manual Review Required)</span>
+                    </div>
+                    <div id="batch-reviews-container"></div>
+                </div>
+            </section>
+
+            <!-- 5.5 ORTHODOX HARVESTER TAB -->
+            <section id="tab-orthodox" class="tab-panel">
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <div>
+                            <span>⛪️ የኢትዮጵያ ኦርቶዶክስ ተዋሕዶ መጽሐፍት ማሰባሰቢያ (Orthodox Harvester)</span>
+                            <p style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">
+                                ሁሉንም የኦርቶዶክስ ቻናሎችና ግሩፖች በመቃኘት፣ እያንዳንዱን መጽሐፍ እየመረመረ፣ ልብወለድና የማይገናኙትን አስቀርቶ በቀጥታ ወደ ዒላማው ቻናል ያስተላልፋል።
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-primary" id="btn-start-orthodox" onclick="startOrthodoxHarvester()">▶ Start Harvester</button>
+                            <button class="btn btn-secondary" id="btn-stop-orthodox" onclick="stopOrthodoxHarvester()" disabled>⏹ Stop</button>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom: 20px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px; padding: 14px;">
+                        <div style="font-size: 13px; color: var(--text-primary); margin-bottom: 6px;">
+                            📡 <strong>ዒላማ ቻናል (Destination):</strong> <span id="orthodox-target-channel" style="color: var(--accent-blue); font-weight: 600;">https://t.me/+2EsS9AQ1kt9mYmFk</span>
+                        </div>
+                        <div style="font-size: 13px; color: var(--text-secondary);">
+                            🔄 <strong>ወቅታዊ ሁኔታ:</strong> <span id="orthodox-status-badge" class="badge badge-pending">Idle</span> | 
+                            <strong>እየተቃኘ ያለ ምንጭ:</strong> <span id="orthodox-current-source" style="color: var(--accent-yellow); font-weight: 500;">-</span> |
+                            <strong>የመጨረሻ የተላከው:</strong> <span id="orthodox-last-sent" style="color: var(--accent-green);">-</span>
+                        </div>
+                    </div>
+
+                    <div class="cards-grid">
+                        <div class="stat-card">
+                            <div class="stat-header"><span>የተመረመሩ ሰነዶች</span> <span>🔍</span></div>
+                            <div class="stat-value" id="orthodox-stat-analyzed">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-header"><span>ወደ ቻናሉ የተላኩ</span> <span>⛪️</span></div>
+                            <div class="stat-value" id="orthodox-stat-forwarded" style="color: var(--accent-green);">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-header"><span>የተጣሩ (ልብወለድ/ሌላ)</span> <span>🚫</span></div>
+                            <div class="stat-value" id="orthodox-stat-rejected" style="color: var(--accent-red);">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-header"><span>ቀደም ሲል የተላኩ (ድጋሚ)</span> <span>⏭</span></div>
+                            <div class="stat-value" id="orthodox-stat-duplicates" style="color: var(--text-secondary);">0</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 6. HISTORY TAB -->
+            <section id="tab-history" class="tab-panel">
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>📜 Processed Books & File History</span>
+                        <div style="display: flex; gap: 8px;">
+                            <select id="history-filter" class="select-field" style="width: 150px;" onchange="loadHistory()">
+                                <option value="all">All</option>
+                                <option value="sent">Sent</option>
+                                <option value="not_found">Not Found</option>
+                                <option value="review_required">Needs Review</option>
+                                <option value="failed">Failed</option>
+                            </select>
+                            <button class="btn btn-secondary" onclick="loadHistory()">Refresh</button>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Requested Title</th>
+                                    <th>Filename</th>
+                                    <th>Source</th>
+                                    <th>Confidence</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-table-body">
+                                <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No history recorded yet.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 7. SETTINGS TAB -->
+            <section id="tab-settings" class="tab-panel">
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>⚙️ Search & Automation Settings</span>
+                        <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Minimum Confidence for Auto-Send (%)</label>
+                            <input type="number" id="setting-min-confidence" class="input-field" min="50" max="100" value="90">
+                        </div>
+                        <div class="form-group">
+                            <label>Review Threshold for Uncertain Matches (%)</label>
+                            <input type="number" id="setting-review-threshold" class="input-field" min="30" max="90" value="70">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Maximum File Size (MB)</label>
+                            <input type="number" id="setting-max-size" class="input-field" value="500">
+                        </div>
+                        <div class="form-group">
+                            <label>Allowed Extensions (comma-separated)</label>
+                            <input type="text" id="setting-extensions" class="input-field" value="pdf,epub,mobi,djvu">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Search Document Limit Per Chat</label>
+                        <input type="number" id="setting-search-limit" class="input-field" value="100">
+                    </div>
+
+                    <div style="margin: 20px 0; border-top: 1px solid var(--border-color); padding-top: 16px;">
+                        <h4 style="font-size: 14px; margin-bottom: 12px;">Options</h4>
+                        <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px;">
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="setting-auto-send"> Automatically send high-confidence matches
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="setting-ask-uncertain"> Ask me for uncertain matches (Review Mode)
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="setting-skip-duplicates"> Skip duplicate files previously sent
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="setting-delete-downloads"> Delete temporary files after successful sending
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="setting-continue-errors"> Continue processing remaining books if one fails
+                            </label>
+                        </div>
+                    </div>
+
+                    <div style="margin: 20px 0; border-top: 1px solid var(--border-color); padding-top: 16px;">
+                        <h4 style="font-size: 14px; margin-bottom: 12px;">Confidence Scoring Weights (%)</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Title Weight</label>
+                                <input type="number" id="setting-weight-title" class="input-field" value="60">
+                            </div>
+                            <div class="form-group">
+                                <label>Author Weight</label>
+                                <input type="number" id="setting-weight-author" class="input-field" value="25">
+                            </div>
+                            <div class="form-group">
+                                <label>Edition Weight</label>
+                                <input type="number" id="setting-weight-edition" class="input-field" value="10">
+                            </div>
+                            <div class="form-group">
+                                <label>Relevance Weight</label>
+                                <input type="number" id="setting-weight-relevance" class="input-field" value="5">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 8. LOGS TAB -->
+            <section id="tab-logs" class="tab-panel">
+                <div class="panel-card">
+                    <div class="panel-title">
+                        <span>💻 Application Live Logs</span>
+                        <button class="btn btn-secondary" onclick="loadLogs()">Refresh Logs</button>
+                    </div>
+                    <div class="terminal-box" id="terminal-logs">Loading logs...</div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Telegram Authentication Modal -->
+    <div class="modal-backdrop" id="auth-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Telegram Connection Setup</h3>
+                <button class="close-btn" onclick="closeAuthModal()">✕</button>
+            </div>
+
+            <!-- Step 1: Credentials -->
+            <div id="auth-step-credentials">
+                <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+                    Obtain your official API credentials from <strong>my.telegram.org</strong> (under 'API development tools').
+                </p>
+                <div class="form-group">
+                    <label>Telegram API ID *</label>
+                    <input type="number" id="modal-api-id" class="input-field" placeholder="e.g. 12345678">
+                </div>
+                <div class="form-group">
+                    <label>Telegram API Hash *</label>
+                    <input type="password" id="modal-api-hash" class="input-field" placeholder="32-character hex hash">
+                </div>
+                <div class="form-group">
+                    <label>Phone Number (with country code) *</label>
+                    <input type="text" id="modal-phone" class="input-field" placeholder="e.g. +1234567890">
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-top: 20px;">
+                    <button class="btn btn-danger" id="modal-btn-disconnect" onclick="disconnectTelegram()" style="display: none;">Disconnect Account</button>
+                    <button class="btn btn-primary" id="modal-btn-connect" onclick="submitTelegramConnect()">Send Verification Code</button>
+                </div>
+            </div>
+
+            <!-- Step 2: Code verification -->
+            <div id="auth-step-code" style="display: none;">
+                <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+                    Telegram sent a verification code to your official Telegram app or SMS. Please enter it below:
+                </p>
+                <div class="form-group">
+                    <label>Verification Code *</label>
+                    <input type="text" id="modal-code" class="input-field" placeholder="e.g. 12345">
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+                    <button class="btn btn-secondary" onclick="resetAuthModal()">Back</button>
+                    <button class="btn btn-primary" onclick="submitTelegramCode()">Verify Code</button>
+                </div>
+            </div>
+
+            <!-- Step 3: 2FA Password -->
+            <div id="auth-step-password" style="display: none;">
+                <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+                    Your Telegram account is protected with Two-Step Verification (2FA). Enter your password:
+                </p>
+                <div class="form-group">
+                    <label>2FA Password *</label>
+                    <input type="password" id="modal-password" class="input-field" placeholder="Your Telegram 2FA password">
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+                    <button class="btn btn-secondary" onclick="resetAuthModal()">Back</button>
+                    <button class="btn btn-primary" onclick="submitTelegramPassword()">Confirm Password</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

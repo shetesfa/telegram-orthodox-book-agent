@@ -1,0 +1,42 @@
+# Environment and secrets
+.env
+*.env
+*.key
+*.pem
+
+# Telegram session and auth files
+*.session
+*.session-journal
+telegram_user_session.*
+*.session*
+
+# Database & SQLite
+*.db
+*.sqlite
+*.sqlite3
+data/database/
+data/telegram_user_session*
+data/downloads/
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Scratch & Debug files
+test_*.py
+debug_*.py
+check_*.py
+clean_*.py
+*.txt
+*.json
+!requirements.json
