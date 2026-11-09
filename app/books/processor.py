@@ -11,6 +11,8 @@ from app.telegram.client import telegram_manager
 from app.telegram.search import search_documents_in_sources
 from app.telegram.sender import send_book_to_saved_messages
 from app.books.matcher import rank_candidates
+from app.books.gemini_verifier import ensure_book_verified_before_output
+from app.books.classifier import classify_book_locally
 from app.config import logger
 
 class BatchProcessor:
@@ -152,6 +154,23 @@ class BatchProcessor:
                 self.current_title = book["title"]
                 book_id = book["id"]
 
+                # 0. Pre-Scan: Block stale fiction/academic titles sitting in DB in 0.001s
+                local_check = classify_book_locally(title=book["title"])
+                if local_check["category"] in ("Fiction", "Scientific/Academic", "Other_Religion", "Secular"):
+                    logger.warning("🛑 [Batch Processor] Blocked blacklisted entry '%s' (%s)", book["title"], local_check["reason"])
+                    self.stats["failed"] += 1
+                    await update_book_status(
+                        book_id,
+                        status="rejected",
+                        is_orthodox=False,
+                        verified_by="rejected",
+                        verification_score=0.0,
+                        book_category=local_check["category"],
+                        verification_reason=local_check["reason"],
+                        notes=f"Rejected: {local_check['reason']}"
+                    )
+                    continue
+
                 await update_book_status(book_id, "searching")
                 logger.info("[%d/%d] Searching for: %s", idx, self.total_books, book["title"])
 
@@ -186,11 +205,15 @@ class BatchProcessor:
                                 best_candidate,
                                 requested_title=book["title"],
                                 author=book.get("author", ""),
-                                confidence=best_score
+                                confidence=best_score,
+                                book_id=book_id
                             )
                             if send_res.get("status") == "duplicate_skipped":
                                 self.stats["skipped_duplicates"] += 1
                                 await update_book_status(book_id, "sent", confidence=best_score, selected_file=best_candidate["filename"], notes="Duplicate skipped (already sent previously)")
+                            elif send_res.get("status") == "rejected":
+                                self.stats["failed"] += 1
+                                await update_book_status(book_id, "rejected", confidence=0.0, notes=send_res.get("error", "Rejected by verification gate"))
                             elif send_res.get("success"):
                                 self.stats["sent"] += 1
                                 await update_book_status(book_id, "sent", confidence=best_score, selected_file=best_candidate["filename"])

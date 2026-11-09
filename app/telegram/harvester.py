@@ -4,10 +4,9 @@ from typing import Dict, Any, List, Optional
 from telethon.tl.types import InputMessagesFilterDocument, DocumentAttributeFilename, Channel, Chat
 from app.telegram.client import telegram_manager
 from app.database import is_file_processed, record_processed_file, get_settings
-from app.config import logger
-from app.books.gemini_verifier import verify_book_with_gemini
+from app.config import logger, TARGET_CHANNEL_LINK
+from app.books.gemini_verifier import verify_book_hybrid_async, ensure_book_verified_before_output
 
-TARGET_CHANNEL_LINK = "https://t.me/+2EsS9AQ1kt9mYmFk"
 TARGET_BOOK_GOAL = 5000
 
 # የታወቁ ዋና ዋና የኢትዮጵያ ኦርቶዶክስ ተዋሕዶ ቴሌግራም ቻናሎች
@@ -434,7 +433,8 @@ class OrthodoxHarvester:
                     un = getattr(entity, "username", "") or ""
                     t = (title + " " + un).lower()
                     
-                    if "atsedeteguhan" in t or "2ess9aq1kt9mymfk" in t:
+                    target_clean = TARGET_CHANNEL_LINK.split("/")[-1].lower().replace("+", "")
+                    if "atsedeteguhan" in t or (target_clean and target_clean in t):
                         continue
 
                     # አጠቃላይ የመጻሕፍት ግሩፖችን እና ሌሎች ልብወለድ፣ ዜና፣ ሚዲያና ትምህርት ቢሮ ያለባቸውን እናስወግዳለን
@@ -482,32 +482,35 @@ class OrthodoxHarvester:
             logger.info("🛑 [VERIFY REJECTED] Disallowed source '%s' for file '%s'", source_title, filename)
             return False
 
-        # 1. ሁለተኛ ደረጃ ፍተሻ፡ ልብወለድ እና የትምህርት ቤት መጻሕፍትን በጥብቅ ማገድ
-        if is_definitely_fiction_or_secular(filename, caption):
-            self.stats["rejected"] += 1
-            logger.info("🛑 [VERIFY REJECTED] Secular/School/Fiction detected: '%s' (Source: %s)", filename, source_title)
-            return False
-
-        # 2. ሦስተኛ ደረጃ ፍተሻ፡ ኦርቶዶክሳዊ መንፈሳዊ መጽሐፍ መሆኑን በጥብቅ ማረጋገጥ
-        if not is_orthodox_book(filename, caption):
-            self.stats["rejected"] += 1
-            logger.info("🛑 [VERIFY REJECTED] Not verified as Orthodox spiritual book: '%s'", filename)
-            return False
-
-        # 3. አራተኛ ደረጃ ፍተሻ፡ ቀደም ሲል የተላከ መሆኑን መፈተሽ (Duplicates check)
+        # 1. ቀደም ሲል የተላከ መሆኑን መፈተሽ (Duplicates check)
         already_done = await is_file_processed(msg.chat_id, msg.id, filename)
         if already_done:
             self.stats["duplicates"] += 1
             return False
 
-        # 4. አምስተኛ ደረጃ ፍተሻ፡ በ Gemini AI ጥብቅ ማረጋገጫ (Always Gemini Verify)
-        gemini_check = await verify_book_with_gemini(filename, caption)
-        if not gemini_check.get("is_orthodox", False):
+        # 2. Extract ~15KB thumbnail if available (<0.2s)
+        thumb_bytes = None
+        if hasattr(msg, "document") and msg.document and getattr(msg.document, "thumbs", None):
+            try:
+                thumb_bytes = await client.download_media(msg, file=bytes, thumb=-1)
+            except Exception:
+                pass
+
+        # 3. PRE-OUTPUT HYBRID VERIFICATION GATE
+        is_valid, verdict = await ensure_book_verified_before_output(
+            title="",
+            filename=filename,
+            caption=caption,
+            source_channel_title=source_title,
+            thumb_bytes=thumb_bytes
+        )
+
+        if not is_valid:
             self.stats["rejected"] += 1
-            logger.info("🛑 [GEMINI REJECTED] Secular/Unverified: '%s' (Reason: %s)", filename, gemini_check.get("reason"))
+            logger.info("🛑 [HARVESTER GATE REJECTED] '%s' (Reason: %s, Category: %s)", filename, verdict.get("reason"), verdict.get("category"))
             return False
 
-        logger.info("✅ [GEMINI & CODE PASSED] 100%% Authentic Orthodox Book: '%s' (Source: %s) -> Sending...", filename, source_title)
+        logger.info("✅ [HYBRID GATE APPROVED] 100%% Authentic Orthodox Book: '%s' (Source: %s) -> Forwarding...", filename, source_title)
 
         clean_title = re.sub(r"\.(pdf|epub|djvu)$", "", filename, flags=re.IGNORECASE).replace("_", " ").strip()
 

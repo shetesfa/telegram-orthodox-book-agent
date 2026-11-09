@@ -43,9 +43,20 @@ TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID", "").strip()
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "").strip()
 TELEGRAM_PHONE = os.getenv("TELEGRAM_PHONE", "").strip()
 
-# Gemini AI Configuration
+# Target Channel Configuration
+TARGET_CHANNEL_LINK = os.getenv("TARGET_CHANNEL_LINK", "https://t.me/atsedeteguhan").strip()
+
+# Verification & Hybrid Mode Configuration
+VERIFICATION_MODE = os.getenv("VERIFICATION_MODE", "hybrid").strip()
+LOCAL_APPROVAL_THRESHOLD = int(os.getenv("LOCAL_APPROVAL_THRESHOLD", "80"))
+GEMINI_MIN_CONFIDENCE = float(os.getenv("GEMINI_MIN_CONFIDENCE", "0.80"))
+
+# Google Gemini AI API Configuration (Get from https://aistudio.google.com)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+
+# Security
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "").strip()
 
 # Default Settings
 DEFAULT_SETTINGS = {
@@ -64,5 +75,8 @@ DEFAULT_SETTINGS = {
     "weight_edition": 10,
     "weight_relevance": 5,
     "enable_global_search": True,
-    "target_channel": "https://t.me/+2EsS9AQ1kt9mYmFk"
+    "target_channel": TARGET_CHANNEL_LINK,
+    "verification_mode": VERIFICATION_MODE,
+    "local_approval_threshold": LOCAL_APPROVAL_THRESHOLD,
+    "gemini_min_confidence": GEMINI_MIN_CONFIDENCE
 }

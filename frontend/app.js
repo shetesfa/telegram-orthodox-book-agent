@@ -386,13 +386,25 @@ async function loadBooks() {
             else if (b.status === "review_required") badgeClass = "badge-warning";
             else if (b.status === "not_found") badgeClass = "badge-danger";
 
+            let verifierBadge = `<span class="badge badge-secondary" style="font-size: 11px;">Pending</span>`;
+            if (b.verified_by === "local_rules") {
+                verifierBadge = `<span class="badge" style="background-color: #2e7d32; color: #fff; font-size: 11px;">⚡ Local Rules</span>`;
+            } else if (b.verified_by === "gemini_helper") {
+                verifierBadge = `<span class="badge" style="background-color: #1565c0; color: #fff; font-size: 11px;">🤖 Gemini Helper</span>`;
+            } else if (b.verified_by === "rejected") {
+                verifierBadge = `<span class="badge" style="background-color: #c62828; color: #fff; font-size: 11px;">🚫 Rejected</span>`;
+            }
+
+            const scoreVal = b.verification_score || b.confidence || 0;
+            const scoreText = scoreVal ? `${Number(scoreVal).toFixed(0)}%` : "-";
+
             tr.innerHTML = `
-                <td>#${b.id}</td>
+                <td>#${escapeHtml(b.id)}</td>
                 <td><strong>${escapeHtml(b.title)}</strong></td>
                 <td>${escapeHtml(b.author || "-")}</td>
                 <td>${escapeHtml(b.edition || "-")}</td>
-                <td><span class="badge ${badgeClass}">${b.status}</span></td>
-                <td>${b.confidence ? b.confidence + "%" : "-"}</td>
+                <td><span class="badge ${badgeClass}">${escapeHtml(b.status)}</span></td>
+                <td>${verifierBadge} <small style="color: var(--text-muted); font-weight: 600;">${escapeHtml(scoreText)}</small></td>
                 <td>
                     <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;" onclick="testBookFromList('${escapeHtml(b.title)}')">🔎 Test</button>
                     <button class="btn btn-danger" style="padding: 4px 8px; font-size: 11px;" onclick="deleteBookItem(${b.id})">🗑 Delete</button>

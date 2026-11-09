@@ -6,73 +6,122 @@ from datetime import datetime
 from app.config import DATABASE_PATH, DEFAULT_SETTINGS, logger
 
 def init_db_sync():
-    """Synchronous database initialization for setup and migrations."""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
+    """Synchronous database initialization for setup and migrations with safe ALTER TABLE."""
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        cursor = conn.cursor()
 
-    # Books Table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS books_requested (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        author TEXT,
-        isbn TEXT,
-        edition TEXT,
-        status TEXT DEFAULT 'pending',
-        selected_file TEXT,
-        confidence REAL DEFAULT 0.0,
-        notes TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
+        # Books Table (Standard Books repository)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS books (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            author TEXT,
+            isbn TEXT,
+            edition TEXT,
+            status TEXT DEFAULT 'pending',
+            is_orthodox BOOLEAN DEFAULT 0,
+            verified_by TEXT DEFAULT '',
+            verification_score REAL DEFAULT 0.0,
+            book_category TEXT DEFAULT '',
+            verification_reason TEXT DEFAULT '',
+            source_channel_title TEXT DEFAULT '',
+            normalized_title TEXT DEFAULT '',
+            selected_file TEXT,
+            confidence REAL DEFAULT 0.0,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
 
-    # Processed and Sent Files Table (Duplicate prevention)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS processed_files (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        requested_title TEXT NOT NULL,
-        author TEXT,
-        source TEXT,
-        telegram_chat_id INTEGER,
-        telegram_message_id INTEGER,
-        filename TEXT,
-        file_size INTEGER,
-        file_hash TEXT,
-        confidence REAL,
-        status TEXT,
-        date_found TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        date_sent TIMESTAMP
-    )
-    """)
+        # Books Requested Table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS books_requested (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            author TEXT,
+            isbn TEXT,
+            edition TEXT,
+            status TEXT DEFAULT 'pending',
+            is_orthodox BOOLEAN DEFAULT 0,
+            verified_by TEXT DEFAULT '',
+            verification_score REAL DEFAULT 0.0,
+            book_category TEXT DEFAULT '',
+            verification_reason TEXT DEFAULT '',
+            source_channel_title TEXT DEFAULT '',
+            normalized_title TEXT DEFAULT '',
+            selected_file TEXT,
+            confidence REAL DEFAULT 0.0,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
 
-    # Telegram Sources Table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS telegram_sources (
-        chat_id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        username TEXT,
-        type TEXT,
-        enabled INTEGER DEFAULT 1,
-        last_searched TIMESTAMP
-    )
-    """)
+        # Migration helper for newly added columns
+        migration_columns = [
+            ("is_orthodox", "BOOLEAN DEFAULT 0"),
+            ("verified_by", "TEXT DEFAULT ''"),
+            ("verification_score", "REAL DEFAULT 0.0"),
+            ("book_category", "TEXT DEFAULT ''"),
+            ("verification_reason", "TEXT DEFAULT ''"),
+            ("source_channel_title", "TEXT DEFAULT ''"),
+            ("normalized_title", "TEXT DEFAULT ''"),
+        ]
 
-    # Settings Table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS app_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-    )
-    """)
+        for table in ["books", "books_requested"]:
+            cursor.execute(f"PRAGMA table_info({table})")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            for col_name, col_def in migration_columns:
+                if col_name not in existing_cols:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}")
+                    logger.info("Migrated table '%s': added column '%s'", table, col_name)
 
-    # Insert default settings if not exists
-    for key, val in DEFAULT_SETTINGS.items():
-        cursor.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)", (key, str(val)))
+        # Processed and Sent Files Table (Duplicate prevention)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS processed_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            requested_title TEXT NOT NULL,
+            author TEXT,
+            source TEXT,
+            telegram_chat_id INTEGER,
+            telegram_message_id INTEGER,
+            filename TEXT,
+            file_size INTEGER,
+            file_hash TEXT,
+            confidence REAL,
+            status TEXT,
+            date_found TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            date_sent TIMESTAMP
+        )
+        """)
 
-    conn.commit()
-    conn.close()
-    logger.info("Database initialized successfully at %s", DATABASE_PATH)
+        # Telegram Sources Table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS telegram_sources (
+            chat_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            username TEXT,
+            type TEXT,
+            enabled INTEGER DEFAULT 1,
+            last_searched TIMESTAMP
+        )
+        """)
+
+        # Settings Table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """)
+
+        # Insert default settings if not exists
+        for key, val in DEFAULT_SETTINGS.items():
+            cursor.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)", (key, str(val)))
+
+        conn.commit()
+    logger.info("Database initialized and verified successfully at %s", DATABASE_PATH)
 
 async def init_db():
     """Async database initialization."""
@@ -93,11 +142,11 @@ async def get_settings() -> Dict[str, Any]:
             settings = dict(DEFAULT_SETTINGS)
             for row in rows:
                 key, val = row["key"], row["value"]
-                if key in ("telegram_phone", "telegram_api_hash", "allowed_extensions"):
+                if key in ("telegram_phone", "telegram_api_hash", "allowed_extensions", "target_channel", "verification_mode"):
                     settings[key] = str(val)
-                elif val.lower() in ("true", "false"):
-                    settings[key] = val.lower() == "true"
-                elif val.isdigit():
+                elif str(val).lower() in ("true", "false"):
+                    settings[key] = str(val).lower() == "true"
+                elif str(val).isdigit():
                     settings[key] = int(val)
                 else:
                     try:
@@ -111,27 +160,77 @@ async def update_setting(key: str, value: Any):
         await db.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)", (key, str(value)))
         await db.commit()
 
-async def get_all_books() -> List[Dict[str, Any]]:
+async def get_all_books(only_orthodox: bool = False) -> List[Dict[str, Any]]:
     async with get_db_connection() as db:
-        async with db.execute("SELECT * FROM books_requested ORDER BY id ASC") as cursor:
+        query = "SELECT * FROM books_requested"
+        if only_orthodox:
+            query += " WHERE is_orthodox = 1"
+        query += " ORDER BY id ASC"
+        async with db.execute(query) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
-async def add_book(title: str, author: str = "", isbn: str = "", edition: str = "") -> int:
+async def add_book(
+    title: str,
+    author: str = "",
+    isbn: str = "",
+    edition: str = "",
+    is_orthodox: bool = False,
+    verified_by: str = "",
+    verification_score: float = 0.0,
+    book_category: str = "",
+    verification_reason: str = "",
+    source_channel_title: str = "",
+    normalized_title: str = ""
+) -> int:
     async with get_db_connection() as db:
-        cursor = await db.execute(
-            "INSERT INTO books_requested (title, author, isbn, edition, status) VALUES (?, ?, ?, ?, 'pending')",
-            (title.strip(), author.strip(), isbn.strip(), edition.strip())
-        )
+        cursor = await db.execute("""
+            INSERT INTO books_requested 
+            (title, author, isbn, edition, status, is_orthodox, verified_by, verification_score, book_category, verification_reason, source_channel_title, normalized_title) 
+            VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            title.strip(), author.strip(), isbn.strip(), edition.strip(),
+            1 if is_orthodox else 0, verified_by, verification_score,
+            book_category, verification_reason, source_channel_title, normalized_title
+        ))
         await db.commit()
         return cursor.lastrowid
 
-async def update_book_status(book_id: int, status: str, confidence: float = 0.0, selected_file: str = "", notes: str = ""):
+async def update_book_status(
+    book_id: int,
+    status: str,
+    confidence: float = 0.0,
+    selected_file: str = "",
+    notes: str = "",
+    is_orthodox: Optional[bool] = None,
+    verified_by: Optional[str] = None,
+    verification_score: Optional[float] = None,
+    book_category: Optional[str] = None,
+    verification_reason: Optional[str] = None
+):
     async with get_db_connection() as db:
-        await db.execute(
-            "UPDATE books_requested SET status = ?, confidence = ?, selected_file = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (status, confidence, selected_file, notes, book_id)
-        )
+        updates = ["status = ?", "confidence = ?", "selected_file = ?", "notes = ?", "updated_at = CURRENT_TIMESTAMP"]
+        params = [status, confidence, selected_file, notes]
+
+        if is_orthodox is not None:
+            updates.append("is_orthodox = ?")
+            params.append(1 if is_orthodox else 0)
+        if verified_by is not None:
+            updates.append("verified_by = ?")
+            params.append(verified_by)
+        if verification_score is not None:
+            updates.append("verification_score = ?")
+            params.append(verification_score)
+        if book_category is not None:
+            updates.append("book_category = ?")
+            params.append(book_category)
+        if verification_reason is not None:
+            updates.append("verification_reason = ?")
+            params.append(verification_reason)
+
+        params.append(book_id)
+        query = f"UPDATE books_requested SET {', '.join(updates)} WHERE id = ?"
+        await db.execute(query, params)
         await db.commit()
 
 async def delete_book(book_id: int):

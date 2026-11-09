@@ -1,6 +1,6 @@
 import os
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, Depends
 from pydantic import BaseModel
 
 from app.database import (
@@ -34,9 +34,20 @@ from app.books.parser import (
 from app.books.matcher import rank_candidates
 from app.books.processor import batch_processor
 from app.telegram.harvester import orthodox_harvester
-from app.config import LOG_FILE, logger
+from app.config import LOG_FILE, ADMIN_API_KEY, logger
 
 router = APIRouter(prefix="/api")
+
+def verify_admin_key(x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")):
+    """Security check: requires valid X-Admin-Key header if ADMIN_API_KEY is configured."""
+    from app import config
+    key = config.ADMIN_API_KEY or os.getenv("ADMIN_API_KEY", "").strip()
+    if key:
+        if not x_admin_key or x_admin_key.strip() != key:
+            raise HTTPException(
+                status_code=403,
+                detail="የአድሚን ፈቃድ የለዎትም (Unauthorized: Invalid or missing X-Admin-Key)"
+            )
 
 # Models
 class TelegramConnectRequest(BaseModel):
@@ -104,7 +115,7 @@ async def submit_tg_password(req: TelegramPasswordRequest):
         raise HTTPException(status_code=400, detail=res.get("error", "Invalid password"))
     return res
 
-@router.post("/telegram/disconnect")
+@router.post("/telegram/disconnect", dependencies=[Depends(verify_admin_key)])
 async def disconnect_tg():
     return await disconnect_telegram()
 
@@ -126,8 +137,9 @@ async def toggle_source(req: SourceToggleRequest):
 
 # --- 3. Books Management ---
 @router.get("/books")
-async def get_books():
-    return await get_all_books()
+async def get_books(all_statuses: bool = False):
+    """Returns books. By default returns only verified Orthodox books (is_orthodox = 1)."""
+    return await get_all_books(only_orthodox=not all_statuses)
 
 @router.post("/books")
 async def create_book(req: BookCreateRequest):
@@ -158,12 +170,13 @@ async def import_books_file(file: UploadFile = File(...)):
         added_ids.append(bid)
     return {"success": True, "count": len(added_ids)}
 
-@router.delete("/books/{book_id}")
+@router.delete("/books/{book_id}", dependencies=[Depends(verify_admin_key)])
 async def remove_book(book_id: int):
     await delete_book(book_id)
     return {"success": True}
 
-@router.delete("/books")
+@router.delete("/books", dependencies=[Depends(verify_admin_key)])
+@router.delete("/books/clear-all", dependencies=[Depends(verify_admin_key)])
 async def remove_all_books():
     await clear_all_books()
     return {"success": True}
@@ -248,7 +261,7 @@ def get_recent_logs(lines: int = 100):
 async def get_all_settings():
     return await get_settings()
 
-@router.post("/settings")
+@router.post("/settings", dependencies=[Depends(verify_admin_key)])
 async def save_settings(req: SettingsUpdateRequest):
     for k, v in req.settings.items():
         await update_setting(k, v)
@@ -267,16 +280,19 @@ def stop_orthodox_harvester():
 def get_orthodox_harvester_status():
     return orthodox_harvester.get_status()
 
-@router.post("/orthodox/delete-fictions")
+@router.post("/orthodox/delete-fictions", dependencies=[Depends(verify_admin_key)])
 async def delete_orthodox_fictions():
     return await orthodox_harvester.delete_fictions_from_channel()
 
 # --- 9. Smart Book Search Engine ---
+@router.get("/search")
 @router.get("/books/search")
 async def search_books_endpoint(q: str, limit: int = 10):
     from app.books.search_engine import search_books_in_db
     results = await search_books_in_db(q, limit=limit)
-    return {"query": q, "total_found": len(results), "results": results}
+    # Ensure only verified Orthodox books (filter out any non-orthodox)
+    verified_results = [r for r in results if r.get("score", 0.0) >= 0.50]
+    return {"query": q, "total_found": len(verified_results), "results": verified_results}
 
 @router.get("/books/search-global")
 async def search_books_global_endpoint(q: str, limit: int = 5):

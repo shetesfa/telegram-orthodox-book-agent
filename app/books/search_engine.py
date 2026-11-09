@@ -1,35 +1,16 @@
 import re
 import difflib
+import asyncio
 from typing import List, Dict, Any, Optional
 from app.database import get_db_connection
-from app.telegram.harvester import is_orthodox_book, is_definitely_fiction_or_secular, classify_orthodox_book
-from app.config import logger
+from app.books.classifier import classify_book_locally, normalize_amharic
+from app.books.gemini_verifier import verify_books_batch_with_gemini
+from app.config import logger, LOCAL_APPROVAL_THRESHOLD
 
-# የአማርኛ የሆሞፎን ፊደላት መተኪያ ሰንጠረዥ (Homophone Normalization Table)
-AMHARIC_HOMOPHONE_MAP = {
-    # ሐ, ኀ -> ሀ
-    'ሐ': 'ሀ', 'ሑ': 'ሁ', 'ሒ': 'ሂ', 'ሓ': 'ሃ', 'ሔ': 'ሄ', 'ሕ': 'ህ', 'ሖ': 'ሆ',
-    'ኀ': 'ሀ', 'ኁ': 'ሁ', 'ኂ': 'ሂ', 'ኃ': 'ሃ', 'ኄ': 'ሄ', 'ኅ': 'ህ', 'ኆ': 'ሆ',
-    # ሠ -> ሰ
-    'ሠ': 'ሰ', 'ሡ': 'ሱ', 'ሢ': 'ሲ', 'ሣ': 'ሳ', 'ሤ': 'ሴ', 'ሥ': 'ስ', 'ሦ': 'ሶ',
-    # ዐ -> አ
-    'ዐ': 'አ', 'ዑ': 'ኡ', 'ዒ': 'ኢ', 'ዓ': 'አ', 'ዔ': 'ኤ', 'ዕ': 'እ', 'ዖ': 'ኦ',
-    # ፀ -> ጸ
-    'ፀ': 'ጸ', 'ፁ': 'ጹ', 'ፂ': 'ጺ', 'ፃ': 'ጻ', 'ፄ': 'ጼ', 'ፅ': 'ጽ', 'ፆ': 'ጾ',
+# የተለመዱ የአማርኛ መስተዋድዶችና አያያዦች (Stopwords) - ነጥብ እንዳያዛቡ የሚወገዱ
+AMHARIC_STOP_WORDS = {
+    "እና", "ከ", "ወደ", "ስለ", "እስከ", "ላይ", "ውስጥ", "በ", "የ", "ወይም", "ነው", "ነበር", "ጋር", "ለ", "ዘ", "ወ"
 }
-
-def normalize_amharic(text: str) -> str:
-    """የአማርኛ ጽሑፍን ፊደላት፣ ክፍተቶችና ምልክቶች ወደ አንድ ወጥ ቅርጽ ይቀይራል"""
-    if not text:
-        return ""
-    text = text.lower()
-    for char, replacement in AMHARIC_HOMOPHONE_MAP.items():
-        text = text.replace(char, replacement)
-    # ልዩ ምልክቶችንና underscoreን ወደ ክፍተት መቀየር
-    text = re.sub(r'[\.\_\-\:\(\)\[\]\\\/]+', ' ', text)
-    # ከመጠን በላይ የሆኑ ክፍተቶችን ማጽዳት
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
 
 def calculate_similarity(query_norm: str, clean_title: str, raw_filename: str = "") -> float:
     """ፍጹም ጥብቅ እና አስተማማኝ የነጥብ አሰጣጥ ስርዓት (Bulletproof Hierarchy)"""
@@ -43,14 +24,17 @@ def calculate_similarity(query_norm: str, clean_title: str, raw_filename: str = 
 
     # 1. Tier 1: ፍጹም እኩል (100% Exact Match)
     if query_norm == c_norm:
-        # ንጹሕ የፋይል ስም ያለው ቅድሚያ እንዲያገኝ ትንሽ ቦነስ ይሰጠዋል
-        cleanliness_bonus = 0.05 if not re.search(r'[@\(\)0-9]', raw_filename) else 0.01
-        return 1.0 + cleanliness_bonus
+        return 1.05
 
     # 2. Tier 2: የቃላት ሙሉ እኩልነት
-    q_words = set(query_norm.split())
+    q_words = [w for w in query_norm.split() if w not in AMHARIC_STOP_WORDS and len(w) >= 2]
     c_words = set(c_norm.split())
-    if q_words and q_words == c_words:
+
+    if not q_words:
+        q_words = query_norm.split()
+
+    q_set = set(q_words)
+    if q_set and q_set == c_words:
         return 0.99
 
     # 3. Tier 3: ርዕሱ በጥያቄው የሚጀምር ከሆነ (Prefix Match)
@@ -63,18 +47,21 @@ def calculate_similarity(query_norm: str, clean_title: str, raw_filename: str = 
         len_ratio = len(query_norm) / max(len(c_norm), 1)
         return 0.72 + (len_ratio * 0.10)
 
-    # 5. Tier 5: የቃላት ከፊል ተዛምዶ (Word Overlap)
-    overlap = q_words.intersection(c_words)
-    if overlap:
-        overlap_score = len(overlap) / len(q_words)
-        if overlap_score >= 0.5:
-            return 0.55 + (overlap_score * 0.15)
+    # 5. Tier 5: የዋና ቃላት ከፊል ተዛምዶ (Significant Word Overlap - Stopwords excluded)
+    if q_set:
+        overlap = q_set.intersection(c_words)
+        if overlap:
+            overlap_score = len(overlap) / len(q_set)
+            # ቢያንስ 60% የሚሆኑት ዋና ቃላት ከተገኙ ብቻ ነጥብ ይሰጣል
+            if overlap_score >= 0.6:
+                return 0.55 + (overlap_score * 0.15)
 
-    # 6. Tier 6: Levenshtein
-    return difflib.SequenceMatcher(None, query_norm, c_norm).ratio() * 0.50
+    # 6. Tier 6: Levenshtein ratio
+    ratio = difflib.SequenceMatcher(None, query_norm, c_norm).ratio()
+    return ratio * 0.45
 
-async def search_books_in_db(query: str, limit: int = 5, min_threshold: float = 0.45) -> List[Dict[str, Any]]:
-    """በዳታቤዝ ውስጥ ያሉትን የተላኩ መጻሕፍት በተቀራራቢ ፍለጋ (Approximate Match) ይፈልጋል"""
+async def search_books_in_db(query: str, limit: int = 5, min_threshold: float = 0.50) -> List[Dict[str, Any]]:
+    """በዳታቤዝ ውስጥ ያሉትን የተላኩ መጻሕፍት በተቀራራቢ ፍለጋ ይፈልጋል"""
     query_clean = query.strip()
     query_norm = normalize_amharic(query_clean)
     if not query_norm:
@@ -84,7 +71,7 @@ async def search_books_in_db(query: str, limit: int = 5, min_threshold: float = 
     seen_ids = set()
 
     async with get_db_connection() as db:
-        # 1. በቅድሚያ ንጹሕ ርዕሱን (clean_title) እና ፋይል ስሙን በ LIKE መፈለግ
+        # 1. በቅድሚያ ንጹሕ ርዕሱን እና ፋይል ስሙን በ LIKE መፈለግ
         like_term = f"%{query_clean}%"
         async with db.execute("""
             SELECT id, clean_title, requested_title, author, source, telegram_chat_id, telegram_message_id, filename, file_size 
@@ -97,25 +84,27 @@ async def search_books_in_db(query: str, limit: int = 5, min_threshold: float = 
                 seen_ids.add(row["id"])
                 c_title = row["clean_title"] or row["requested_title"] or row["filename"]
                 score = calculate_similarity(query_norm, c_title, row["filename"])
-                results.append({
-                    "id": row["id"],
-                    "title": c_title,
-                    "clean_title": c_title,
-                    "filename": row["filename"],
-                    "source": row["source"],
-                    "telegram_chat_id": row["telegram_chat_id"],
-                    "telegram_message_id": row["telegram_message_id"],
-                    "file_size": row["file_size"],
-                    "score": score,
-                    "match_type": "exact_or_substring"
-                })
+                if score >= min_threshold:
+                    results.append({
+                        "id": row["id"],
+                        "title": c_title,
+                        "clean_title": c_title,
+                        "filename": row["filename"],
+                        "source": row["source"],
+                        "telegram_chat_id": row["telegram_chat_id"],
+                        "telegram_message_id": row["telegram_message_id"],
+                        "file_size": row["file_size"],
+                        "score": score,
+                        "match_type": "exact_like"
+                    })
 
-        # 2. በቂ ካልተገኘ ሙሉውን ዳታቤዝ በሆሞፎን ኖርማላይዜሽን መፈተሽ
+        # 2. Approximate fallback
         if len(results) < limit:
             async with db.execute("""
                 SELECT id, clean_title, requested_title, author, source, telegram_chat_id, telegram_message_id, filename, file_size 
                 FROM processed_files 
                 WHERE status = 'sent'
+                LIMIT 300
             """) as cursor:
                 async for row in cursor:
                     if row["id"] in seen_ids:
@@ -136,79 +125,105 @@ async def search_books_in_db(query: str, limit: int = 5, min_threshold: float = 
                             "match_type": "approximate"
                         })
 
-    # በከፍተኛ ውጤት ነጥብ ቅደም ተከተል ማደራጀት
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:limit]
 
-async def search_books_global(client, query: str, limit: int = 5) -> List[Dict[str, Any]]:
-    """በዳታቤዝ ውስጥ ላልተገኙ መጻሕፍት በቴሌግራም ግሎባል ክላውድ ፈልጎ ያረጋግጣል"""
-    from telethon.tl.types import InputMessagesFilterDocument, DocumentAttributeFilename
-    
-    query_clean = query.strip()
-    query_norm = normalize_amharic(query_clean)
-    if not client or not client.is_connected() or not query_norm:
+async def filter_and_rank_candidates(
+    raw_candidates: List[Dict[str, Any]],
+    query: str,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Fast Hybrid Filtering on Telegram Search candidates:
+    1. Runs classify_book_locally in milliseconds (blocks Fiction/Secular/Academic immediately).
+    2. Approves score >= 80 instantly (0 Gemini calls).
+    3. Batches ambiguous candidates (20 <= score < 80) into a single Gemini batch call (1-2s total).
+    """
+    if not raw_candidates:
         return []
 
-    global_matches = []
-    seen_files = set()
+    query_norm = normalize_amharic(query)
+    approved_candidates = []
+    ambiguous_candidates = []
 
-    try:
-        logger.info("Executing Global Fallback Telegram Search for '%s'...", query_clean)
-        async for msg in client.iter_messages(None, search=query_clean, filter=InputMessagesFilterDocument, limit=40):
-            if not msg.document:
-                continue
+    for cand in raw_candidates:
+        fn = cand.get("filename", "")
+        cap = cand.get("caption", "")
+        ch_title = cand.get("source_channel_title") or cand.get("chat_name", "")
 
-            filename = ""
-            for attr in msg.document.attributes:
-                if isinstance(attr, DocumentAttributeFilename):
-                    filename = attr.file_name
-                    break
-            if not filename:
-                ext = msg.file.ext or ".pdf"
-                filename = f"book_{msg.id}{ext}"
+        # 1. Local classification
+        local = classify_book_locally(
+            title=cand.get("title", ""),
+            filename=fn,
+            caption=cap,
+            source_channel_title=ch_title
+        )
 
-            if filename in seen_files:
-                continue
-            seen_files.add(filename)
+        # Immediate Reject
+        if local["category"] in ("Fiction", "Scientific/Academic", "Other_Religion", "Secular"):
+            continue
 
-            caption = msg.text or ""
-            # የይዘት ጥበቃ እና ማጣራት
-            if is_definitely_fiction_or_secular(filename, caption):
-                continue
-            if not is_orthodox_book(filename, caption):
-                continue
+        sim_score = calculate_similarity(query_norm, fn + " " + cap, fn)
+        cand["similarity_score"] = sim_score
+        cand["local_score"] = local["score"]
+        cand["book_category"] = local["category"]
 
-            t_norm = normalize_amharic(filename + " " + caption)
-            score = calculate_similarity(query_norm, t_norm)
-            if score < 0.35:
-                continue
+        # Immediate High-Score Local Approval
+        if local["is_orthodox"] and local["score"] >= LOCAL_APPROVAL_THRESHOLD:
+            cand["verified_by"] = "local_rules"
+            cand["verification_reason"] = local["reason"]
+            cand["confidence"] = 1.0
+            approved_candidates.append(cand)
+        elif local["score"] >= 20.0:
+            ambiguous_candidates.append(cand)
 
-            chat_title = "Global Orthodox Library"
-            try:
-                chat = await msg.get_chat()
-                chat_title = getattr(chat, "title", "Global Channel")
-            except Exception:
-                pass
+    # 2. Batch Gemini Helper for ambiguous candidates (up to 10 at once)
+    if ambiguous_candidates and len(approved_candidates) < limit:
+        batch_slice = ambiguous_candidates[:10]
+        batch_verdicts = await verify_books_batch_with_gemini(batch_slice)
+        for cand, verdict in zip(batch_slice, batch_verdicts):
+            if verdict.get("is_orthodox", False):
+                cand["verified_by"] = "gemini_helper"
+                cand["verification_reason"] = verdict.get("reason", "")
+                cand["confidence"] = verdict.get("confidence", 0.9)
+                cand["book_category"] = "Orthodox"
+                approved_candidates.append(cand)
 
-            clean_title = re.sub(r"\.(pdf|epub|djvu)$", "", filename, flags=re.IGNORECASE).replace("_", " ").strip()
-            cat = classify_orthodox_book(filename, caption)
+    # Sort primarily by similarity to query, then by local score
+    approved_candidates.sort(key=lambda x: (x.get("similarity_score", 0.0) * 0.6 + (x.get("local_score", 0.0) / 100.0) * 0.4), reverse=True)
+    return approved_candidates[:limit]
 
-            global_matches.append({
-                "msg_obj": msg,
-                "title": clean_title,
-                "filename": filename,
-                "source": chat_title,
-                "category": cat,
-                "file_size": msg.document.size or 0,
-                "score": score,
-                "match_type": "global_telegram"
-            })
+async def search_books_global(client, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """
+    Executes True Global Telegram Search across channels and filters through the Fast Hybrid Engine.
+    """
+    from app.telegram.search import search_documents_globally
+    raw_candidates = await search_documents_globally(query, limit=50)
 
-            if len(global_matches) >= limit:
-                break
+    # Map message object for sender compatibility
+    verified = await filter_and_rank_candidates(raw_candidates, query=query, limit=limit)
 
-    except Exception as ge:
-        logger.error("Error during global book search: %s", ge)
+    results = []
+    for cand in verified:
+        # Fetch the actual message object from the channel if needed
+        chat_id = cand["telegram_chat_id"]
+        msg_id = cand["message_id"]
+        msg_obj = None
+        try:
+            msg_obj = await client.get_messages(chat_id, ids=msg_id)
+        except Exception:
+            pass
 
-    global_matches.sort(key=lambda x: x["score"], reverse=True)
-    return global_matches[:limit]
+        results.append({
+            "msg_obj": msg_obj,
+            "title": cand.get("title") or re.sub(r"\.(pdf|epub|djvu)$", "", cand["filename"], flags=re.IGNORECASE).replace("_", " ").strip(),
+            "filename": cand["filename"],
+            "source": cand.get("source_channel_title") or cand.get("chat_name", "Telegram Channel"),
+            "category": cand.get("book_category", "Orthodox"),
+            "file_size": cand.get("file_size", 0),
+            "score": cand.get("similarity_score", 0.8),
+            "verified_by": cand.get("verified_by", "local_rules"),
+            "match_type": "global_telegram"
+        })
+
+    return results

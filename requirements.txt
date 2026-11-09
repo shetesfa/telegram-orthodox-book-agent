@@ -1,0 +1,9 @@
+telethon>=1.36.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-dotenv>=1.0.1
+google-genai>=1.0.0
+pillow>=10.3.0
+pytesseract>=0.3.10
+python-docx>=1.1.0
+python-multipart>=0.0.9

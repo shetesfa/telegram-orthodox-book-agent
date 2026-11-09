@@ -39,4 +39,4 @@ check_*.py
 clean_*.py
 *.txt
 *.json
-!requirements.json
+!requirements.txt
