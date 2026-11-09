@@ -67,7 +67,14 @@ OTHER_RELIGION_MARKERS = [
     "ፕሮቴስታንት", "ጴንጤ", "ቁርአን", "እስልምና", "ሙስሊም"
 ]
 
-# Category 4 — STRONG EOTC POSITIVE SCORING (+45 points for Core Books/Liturgy)
+# Unmistakable EOTC Canonical/Liturgical Titles (+60 points)
+EOTC_CANONICAL_TITLES = [
+    "ስንክሳር", "ሃይማኖተ አበው", "ፍትሐ ነገሥት", "መጽሐፈ ቅዳሴ", "ውዳሴ ማርያም",
+    "መጽሐፈ ሰዓታት", "ተአምረ ማርያም", "ተአምረ ኢየሱስ", "ጾመ ድጓ", "መዝገበ ጸሎት",
+    "ሰይፈ ሥላሴ", "አርጋኖን", "ዓምደ ሃይማኖት", "ነገረ ማርያም"
+]
+
+# Category 4 — STRONG EOTC POSITIVE SCORING (Core Books/Liturgy)
 EOTC_CORE_MARKERS = [
     "ስንክሳር", "ሃይማኖተ አበው", "ፍትሐ ነገሥት", "መጽሐፈ ቅዳሴ", "ውዳሴ ማርያም",
     "አንድምታ", "ትርጓሜ", "ድጓ", "ጾመ ድጓ", "ዝማሬ", "መዋሥዕት", "መጽሐፈ ሰዓታት",
@@ -196,25 +203,41 @@ def classify_book_locally(
     score = 0.0
     matched_reasons = []
 
-    # Core EOTC books/liturgy (+45)
+    # Unmistakable Canonical/Liturgical Titles (+60 points)
+    canonical_hit = False
+    matched_canonical = None
+    for marker in EOTC_CANONICAL_TITLES:
+        norm_marker = normalize_amharic(marker)
+        if norm_marker and norm_marker in norm_text:
+            score += 60.0
+            matched_canonical = norm_marker
+            matched_reasons.append(f"ቀኖናዊ/ሥርዓተ አምልኮ የቤተክርስቲያን መጽሐፍ («{marker}»)")
+            canonical_hit = True
+            break  # Apply +60 once
+
+    # Core EOTC books/liturgy (+25 if canonical already matched, else +45)
     core_hit = False
     for marker in EOTC_CORE_MARKERS:
         norm_marker = normalize_amharic(marker)
         if norm_marker and norm_marker in norm_text:
-            score += 45.0
+            if canonical_hit and norm_marker == matched_canonical:
+                continue  # Avoid double scoring the exact same token
+            pts = 25.0 if canonical_hit else 45.0
+            score += pts
             matched_reasons.append(f"መሰረታዊ የቤተክርስቲያን መጽሐፍ («{marker}»)")
             core_hit = True
-            break  # Apply +45 once
+            break  # Apply once
 
-    # EOTC Identity/Titles/Patristics (+35)
+    # EOTC Identity/Titles/Patristics (+25 if canonical matched, else +35)
     identity_hit = False
     for marker in EOTC_IDENTITY_MARKERS:
         norm_marker = normalize_amharic(marker)
         if norm_marker and norm_marker in norm_text:
-            score += 35.0
+            pts = 25.0 if canonical_hit else 35.0
+            score += pts
             matched_reasons.append(f"የኦርቶዶክስ ተዋሕዶ ማንነት/ደራሲ/ማዕረግ («{marker}»)")
             identity_hit = True
-            break  # Apply +35 once
+            break  # Apply once
 
     # Source channel verification (+25)
     channel_hit = False
@@ -228,7 +251,7 @@ def classify_book_locally(
 
     score = min(score, 100.0)
 
-    if score >= LOCAL_APPROVAL_THRESHOLD and (core_hit or identity_hit):
+    if score >= LOCAL_APPROVAL_THRESHOLD and (canonical_hit or core_hit or identity_hit):
         return {
             "is_orthodox": True,
             "score": score,

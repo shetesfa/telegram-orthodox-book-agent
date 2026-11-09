@@ -88,8 +88,7 @@ async def verify_book_with_gemini_helper(
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.0,
-            "maxOutputTokens": 250
+            "maxOutputTokens": 1024
         }
     }
 
@@ -198,8 +197,7 @@ async def verify_books_batch_with_gemini(
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.0,
-            "maxOutputTokens": 600
+            "maxOutputTokens": 4096
         }
     }
 
